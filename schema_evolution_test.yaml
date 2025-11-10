@@ -1,0 +1,25 @@
+sales_orders_iceberg:
+  - sourcePath: WorkStatus
+    targetColumn: WorkStatus
+    dataType: STRING
+  - sourcePath: ServiceRequestType
+    targetColumn: ServiceRequestType
+    dataType: STRING
+  - sourcePath: AppId
+    targetColumn: AppId
+    dataType: STRING
+  - sourcePath: pxUpdateDateTime
+    targetColumn: pxUpdateDateTime
+    dataType: TIMESTAMP  
+  - sourcePath: PrimaryFullAddress
+    targetColumn: PrimaryFullAddress
+    dataType: STRING
+  - sourcePath: SubCode
+    targetColumn: SubCode
+    dataType: STRING  
+  - sourcePath: UpdateBy
+    targetColumn: UpdateBy
+    dataType: STRING
+  - sourcePath: CustomStageHistory
+    targetColumn: CustomStageHistory
+    dataType: ARRAY	
