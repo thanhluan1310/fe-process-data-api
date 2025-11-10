@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.apache.spark.sql.functions.*;
+import static org.libs.contanst.AppCont.DEFAULT_FILE_PATH;
 import static org.libs.contanst.AppCont.FILE_KEY;
 import static org.libs.contanst.SparkCont.*;
 
@@ -27,7 +28,11 @@ public class IcebergWriter {
 //        }
         boolean tableExists = SparkService.doesTableExist(spark, tableName);
 
-        df = df.withColumn(FILE_KEY, lit(dataInfo.getFilePath()));
+        String filePath = (dataInfo.getFilePath() == null || dataInfo.getFilePath().isEmpty())
+                ? DEFAULT_FILE_PATH
+                : dataInfo.getFilePath();
+
+        df = df.withColumn(FILE_KEY, lit(filePath));
 
         if (hasDatePartition) {
             df = df.withColumn(dataInfo.getDateField(),
@@ -47,7 +52,7 @@ public class IcebergWriter {
             Column[] restPartitions = partitions.size() > 1
                     ? partitions.subList(1, partitions.size()).toArray(new Column[0])
                     : new Column[0];
-
+            df.show(2);
             df.writeTo(tableName)
                     .partitionedBy(firstPartition, restPartitions)
                     .tableProperty(WRITE_METADATA_DELETE_ENABLED, "true")

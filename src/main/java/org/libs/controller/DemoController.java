@@ -47,6 +47,7 @@ public class DemoController {
         dataInfo.setIdField("pzInskey");
         dataInfo.setDateField("pxCreateDateTime");
         dataInfo.setDateFormat("yyyyMMdd'T'HHmmss.SSS 'GMT'");
+        dataInfo.setFilePath("999999");
         dataInfo.setUseRecursive(useRecursive);
 
         SparkSession spark = dataFactory.getSparkSession(appConf, null, GLUE_CATALOG, null);
