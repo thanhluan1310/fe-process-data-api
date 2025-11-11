@@ -16,6 +16,7 @@ public class Application {
 
     public static void main(String[] args) throws Exception {
         SpringApplication.run(Application.class, args);
+//        RecursiveFlattenDebug.main(args);
         logger.info("Application started successfully, SpringContextHolder initialized.");
     }
 }

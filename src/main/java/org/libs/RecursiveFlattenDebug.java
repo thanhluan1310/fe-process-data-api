@@ -1,59 +1,66 @@
-package org.libs.service;
+package org.libs;
 
+import org.apache.log4j.Level;
+import org.apache.log4j.Logger;
 import org.apache.spark.sql.*;
-import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException;
 import org.apache.spark.sql.expressions.WindowSpec;
 import org.apache.spark.sql.types.*;
-import org.libs.model.DataInfo;
+import org.libs.service.IcebergWriter;
 import org.libs.utils.HashUtil;
-import org.libs.utils.JsonUtils;
-
-import java.io.IOException;
-import java.util.*;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static org.apache.spark.sql.functions.*;
-import static org.libs.contanst.AppCont.*;
-import static org.libs.contanst.AppCont.ID_HASH_COL;
-import static org.libs.contanst.AppCont.PARENT_ID_HASH_COL;
+import static org.libs.contanst.AppCont.HASH_KEY_COL;
+import static org.libs.contanst.AppCont.PARENT_ID_COL;
+import static org.libs.contanst.SparkCont.SPARK_UI_ENABLED;
+import static org.libs.contanst.SparkCont.SPARK_UI_SHOW_CONSOLE_PROGRESS;
 
-public class RecursiveFlattener {
+import java.util.*;
+import java.util.stream.Stream;
 
-    public static void processDataFrame(Dataset<Row> df, SparkSession spark,
-                                        DataInfo dataInfo, String tableName) throws TableAlreadyExistsException, IOException {
+public class RecursiveFlattenDebug {
 
-        String idField = dataInfo.getIdField();
+    static SparkSession spark;
 
-        if (!dataInfo.isUseRecursive()) {
-            IcebergWriter.save(df, spark, tableName, dataInfo, List.of(idField), true);
-            return;
-        }
+    public static void main(String[] args) {
+        Logger.getLogger("org").setLevel(Level.WARN);
+        Logger.getLogger("akka").setLevel(Level.WARN);
+        Logger.getLogger("org.apache.spark").setLevel(Level.WARN);
+        Logger.getLogger("org.apache.spark.storage").setLevel(Level.WARN);
+        Logger.getLogger("org.apache.spark.broadcast").setLevel(Level.WARN);
+        Logger.getLogger("org.apache.hadoop").setLevel(Level.WARN);
 
-        List<String> scalarCols = Arrays.stream(df.schema().fields())
-                .filter(f -> !(f.dataType() instanceof ArrayType) && !(f.dataType() instanceof StructType))
-                .map(StructField::name)
-                .collect(Collectors.toList());
+        spark = SparkSession.builder()
+                .appName("RecursiveFlattenDebug")
+                .master("local[*]")
+                .config(SPARK_UI_ENABLED, "false")
+                .config(SPARK_UI_SHOW_CONSOLE_PROGRESS, "false")
+                .config("spark.ui.showConsoleProgress", "false")
+                .getOrCreate();
 
-        Dataset<Row> dfMain = df.selectExpr(scalarCols.toArray(new String[0]));
-//        dfMain = HashUtil.createHashKey(dfMain, scalarCols.stream().map(functions::col).toList(), HASH_KEY_COL);
-        dfMain = dfMain.withColumn(ID_HASH_COL, hash(col(idField)));
-        dfMain = dfMain.orderBy(col(idField));
+        Dataset<Row> df = spark.read()
+                .option("multiLine", true)
+                .json("sample.json");
 
-        IcebergWriter.save(dfMain, spark, tableName, dataInfo, List.of(idField), true);
+        df.printSchema();
+        df.show(false);
+        spark.range(10).show();
 
-        flattenRecursively(df, idField, spark, dataInfo, tableName);
+        flattenRecursively(df, "root", spark, "root", 0);
+
+        spark.stop();
+
     }
 
-    public static void flattenRecursively(
-            Dataset<Row> df,
-            String parentKey,
-            SparkSession spark,
-            DataInfo dataInfo,
-            String tableName
-    ) throws TableAlreadyExistsException {
-        dataInfo.setIdField(PARENT_ID_COL);
+    /**
+     * Hàm flatten đệ quy — tương tự kiểu mày đang dùng
+     */
+    static void flattenRecursively(Dataset<Row> df, String parentKey, SparkSession spark, String tableName, int level) {
+        String indent = "  ".repeat(level);
+        System.out.println(indent + "👉 Level " + level + " flattening parent: " + parentKey);
+        df.printSchema();
+
         StructType schema = df.schema();
+
         // Bỏ cột quản lý
         List<StructField> fieldsToProcess = Arrays.stream(schema.fields())
                 .filter(f -> !f.name().equals(PARENT_ID_COL) && !f.name().equals(HASH_KEY_COL))
@@ -66,7 +73,7 @@ public class RecursiveFlattener {
                     .withColumn(PARENT_ID_COL, monotonically_increasing_id())
                     .withColumn("element", explode_outer(col(rootArrayCol)))
                     .select(col(PARENT_ID_COL), col("element.*"));
-            flattenRecursively(explodedRoot, PARENT_ID_COL, spark, dataInfo, tableName);
+            flattenRecursively(explodedRoot, PARENT_ID_COL, spark, tableName, level++);
             return;
         }
 
@@ -131,7 +138,7 @@ public class RecursiveFlattener {
                 if (nonEmptyDf.isEmpty()) continue;
 
                 Dataset<Row> exploded = nonEmptyDf
-                        .withColumn(PARENT_ID_COL, col(parentKey))
+                        .withColumn(PARENT_ID_COL, lit(parentKey))
                         .select(col(PARENT_ID_COL), explode_outer(col(colName)).alias(colName))
                         .filter(col(colName).isNotNull());
 
@@ -156,7 +163,7 @@ public class RecursiveFlattener {
                         WindowSpec w = org.apache.spark.sql.expressions.Window.partitionBy(col(PARENT_ID_COL)).orderBy(lit(1));
                         childDfToSave = childDf
                                 .withColumn("_row_idx", row_number().over(w))
-                                .select(col(PARENT_ID_COL), col("_row_idx"));
+                                .select(col(PARENT_ID_COL), col("_row_idx")); // chỉ giữ parent_id + _row_idx
                         hashCols.add(col("_row_idx"));
                     }
 
@@ -165,22 +172,18 @@ public class RecursiveFlattener {
                         childDfToSave = childDfToSave.drop("_row_idx");
 
                     childDfToSave = childDfToSave.dropDuplicates(childKeys.toArray(new String[0]));
-                    childDfToSave = childDfToSave.withColumn(PARENT_ID_HASH_COL, hash(col(PARENT_ID_COL)));
-                    childDfToSave = childDfToSave.orderBy(col(PARENT_ID_COL));
+                    childDfToSave.show();
+                    System.out.println("child table " + childTable);
 
-                    IcebergWriter.save(childDfToSave, spark, childTable, dataInfo, childKeys, false);
-
-                    flattenRecursively(childDf, PARENT_ID_COL, spark, dataInfo, childTable);
+                    flattenRecursively(childDf, PARENT_ID_COL, spark, childTable, level++);
                 } else {
                     Dataset<Row> arrDf = exploded
                             .select(col(PARENT_ID_COL), col(colName).alias("value"))
                             .filter(col("value").isNotNull());
                     arrDf = HashUtil.createHashKey(arrDf, List.of(col(PARENT_ID_COL), col("value")), HASH_KEY_COL);
                     arrDf = arrDf.dropDuplicates(childKeys.toArray(new String[0]));
-                    arrDf = arrDf.withColumn(PARENT_ID_HASH_COL, hash(col(PARENT_ID_COL)));
-                    arrDf = arrDf.orderBy(col(PARENT_ID_COL));
-
-                    IcebergWriter.save(arrDf, spark, childTable, dataInfo, childKeys, false);
+                    arrDf.show(false);
+                    System.out.println("child table " + childTable);
                 }
             }
 
@@ -190,7 +193,7 @@ public class RecursiveFlattener {
                 List<String> childKeys = List.of(PARENT_ID_COL, HASH_KEY_COL);
 
                 Dataset<Row> childDf = df
-                        .withColumn(PARENT_ID_COL, col(parentKey))
+                        .withColumn(PARENT_ID_COL, lit(parentKey))
                         .select(col(PARENT_ID_COL), col(colName + ".*"))
                         .filter(col(colName).isNotNull());
 
@@ -214,7 +217,7 @@ public class RecursiveFlattener {
                     WindowSpec w = org.apache.spark.sql.expressions.Window.partitionBy(col(PARENT_ID_COL)).orderBy(lit(1));
                     childDfToSave = childDf
                             .withColumn("_row_idx", row_number().over(w))
-                            .select(col(PARENT_ID_COL), col("_row_idx"));
+                            .select(col(PARENT_ID_COL), col("_row_idx")); // chỉ giữ parent_id + _row_idx
                     hashCols.add(col("_row_idx"));
                 }
 
@@ -223,12 +226,10 @@ public class RecursiveFlattener {
                     childDfToSave = childDfToSave.drop("_row_idx");
 
                 childDfToSave = childDfToSave.dropDuplicates(childKeys.toArray(new String[0]));
-                childDfToSave = childDfToSave.withColumn(PARENT_ID_HASH_COL, hash(col(PARENT_ID_COL)));
-                childDfToSave = childDfToSave.orderBy(col(PARENT_ID_COL));
 
-                IcebergWriter.save(childDfToSave, spark, childTable, dataInfo, childKeys, false);
-
-                flattenRecursively(childDf, PARENT_ID_COL, spark, dataInfo, childTable);
+                childDfToSave.show(false);
+                System.out.println("child table " + childTable);
+                flattenRecursively(childDf, PARENT_ID_COL, spark, childTable, level++);
             }
         }
     }

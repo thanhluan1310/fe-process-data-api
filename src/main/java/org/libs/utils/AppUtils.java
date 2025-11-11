@@ -5,6 +5,30 @@ import org.libs.config.properties.SparkProperties;
 
 public class AppUtils {
 
+    public static String toSnakeCase(String inputString) {
+        if (inputString == null || inputString.isEmpty()) {
+            return "";
+        }
+
+        String processedString = inputString;
+
+        int lastDotIndex = processedString.lastIndexOf('.');
+        if (lastDotIndex > 0) {
+            processedString = processedString.substring(0, lastDotIndex);
+        }
+
+        String snakeCase = processedString
+                .replaceAll("[-]+", "_")
+                .replaceAll("([A-Z]+)", "_$1")
+                .toLowerCase();
+
+        if (snakeCase.startsWith("_")) {
+            snakeCase = snakeCase.substring(1);
+        }
+
+        return snakeCase;
+    }
+
     private static class IcebergConfigParams {
         final boolean useGlue;
         final String catalogName;
@@ -34,27 +58,4 @@ public class AppUtils {
             return params.catalogName + "." + standardizedTableName;
         }
     }
-
-    public static String toSnakeCase(String inputString) {
-        if (inputString == null || inputString.isEmpty()) {
-            return "";
-        }
-
-        String processedString = inputString;
-
-        int lastDotIndex = processedString.lastIndexOf('.');
-        if (lastDotIndex > 0) {
-            processedString = processedString.substring(0, lastDotIndex);
-        }
-
-        String snakeCase = processedString.replaceAll("([A-Z]+)", "_$1")
-                .toLowerCase();
-
-        if (snakeCase.startsWith("_")) {
-            snakeCase = snakeCase.substring(1);
-        }
-
-        return snakeCase;
-    }
-
 }
